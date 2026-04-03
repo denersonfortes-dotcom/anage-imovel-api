@@ -16,8 +16,6 @@ app.add_middleware(
 
 @app.get("/imovel")
 async def get_imovel(url: str):
-    """Recebe a URL do imovel no site da Anage e retorna dados estruturados."""
-    # Remove parametros UTM para URL limpa
     url_limpa = url.split("?")[0]
 
     try:
@@ -33,70 +31,49 @@ async def get_imovel(url: str):
 
     # Titulo
     titulo = ""
-    tag_title = soup.find("h1")
-    if tag_title:
-        titulo = tag_title.get_text(strip=True)
+    tag_h1 = soup.find("h1")
+    if tag_h1:
+        titulo = tag_h1.get_text(strip=True)
 
-    # Codigo do imovel (pega da URL ou da pagina)
+    # Codigo da URL
     codigo = ""
-    match = re.search(r"-([0-9]+[a-zA-Z])(?:?|$|/)", url_limpa + "?")
+    match = re.search(r"-([0-9a-zA-Z]{5,7}n)(?:\?|$)", url_limpa, re.IGNORECASE)
     if match:
         codigo = match.group(1).upper()
 
-    # Descricao
+    # Descricao - pega todo o texto da pagina e extrai parte relevante
+    page_text = soup.get_text(separator=" ", strip=True)
     descricao = ""
-    # Tenta encontrar o bloco de descricao
-    for selector in ["div.property-description", "div.description", "p.description", ".sobre-imovel p", "div[class*='description']", "div[class*='sobre']"]:
-        el = soup.select_one(selector)
-        if el:
-            descricao = el.get_text(separator=" ", strip=True)
-            break
-    if not descricao:
-        # Pega todo o texto da pagina como fallback
-        body_text = soup.get_text(separator=" ", strip=True)
-        # Procura por padrao de descricao longa
-        match_desc = re.search(r"(Casa|Apartamento|Terreno|Sala|Lote|Cobertura).{200,}", body_text)
-        if match_desc:
-            descricao = match_desc.group(0)[:1500]
+    match_desc = re.search(r"(Casa|Apartamento|Terreno|Sala|Lote|Cobertura|Imóvel).{100,1500}", page_text)
+    if match_desc:
+        descricao = match_desc.group(0)
 
-    # Fotos - pega URLs do dominio images.anageimoveis.com.br
+    # Fotos
     fotos = []
     for img in soup.find_all("img"):
-        src = img.get("src", "")
-        if "images.anageimoveis.com.br" in src or "vista.imobi/fotos" in src:
-            if src not in fotos:
-                fotos.append(src)
-
-    # Tenta tambem em data-src (lazy loading)
-    for img in soup.find_all("img"):
-        src = img.get("data-src", "")
-        if "images.anageimoveis.com.br" in src or "vista.imobi/fotos" in src:
-            if src not in fotos:
+        for attr in ["src", "data-src", "data-lazy-src"]:
+            src = img.get(attr, "")
+            if ("images.anageimoveis.com.br" in src or "vista.imobi/fotos" in src) and src not in fotos:
                 fotos.append(src)
 
     fotos = fotos[:10]
 
     # Preco
     preco = ""
-    price_patterns = [r"R$s*[d.,]+", r"[d]{3}.[d]{3},[d]{2}"]
-    page_text = soup.get_text()
-    for pattern in price_patterns:
-        m = re.search(pattern, page_text)
-        if m:
-            preco = m.group(0).strip()
-            break
+    m = re.search(r"R\$\s*[d.,]+", page_text)
+    if m:
+        preco = m.group(0).strip()
 
-    # Bairro e cidade do titulo ou URL
+    # Bairro e cidade da URL
+    slug = url_limpa.rstrip("/").split("/")[-1]
+    parts = slug.split("-")
     bairro = ""
     cidade = ""
-    url_parts = url_limpa.rstrip("/").split("/")[-1].split("-")
-    # Formato tipico: tipo-bairro-cidade-codigo
-    if len(url_parts) >= 3:
-        cidade = url_parts[-2].replace("-", " ").title() if len(url_parts) > 2 else ""
-        bairro_parts = url_parts[1:-2] if len(url_parts) > 3 else url_parts[1:2]
-        bairro = " ".join(bairro_parts).title()
+    if len(parts) >= 4:
+        cidade = parts[-2].title()
+        bairro = " ".join(parts[1:-2]).title()
 
-    result = {
+    return {
         "codigo": codigo,
         "titulo": titulo,
         "descricao": descricao,
@@ -107,8 +84,6 @@ async def get_imovel(url: str):
         "foto_principal": fotos[0] if fotos else "",
         "url": url_limpa
     }
-
-    return result
 
 
 @app.get("/health")
