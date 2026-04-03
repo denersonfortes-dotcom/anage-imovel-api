@@ -5,6 +5,7 @@ import httpx
 import xml.etree.ElementTree as ET
 from PIL import Image
 from io import BytesIO
+import base64
 
 app = FastAPI()
 
@@ -17,6 +18,7 @@ app.add_middleware(
 
 XML_URL = "https://anageimo-portais.vistahost.com.br/4f13834f2cdbf7b3bd53c37f67de7b43"
 NS = {"vr": "http://www.vivareal.com/schemas/1.0/VRSync"}
+IMG_BASE = "https://images.anageimoveis.com.br/vista.imobi/fotos/"
 
 
 def crop_center_square(img: Image.Image) -> Image.Image:
@@ -67,9 +69,12 @@ async def get_imovel(codigo: str):
 
     fotos_originais = fotos_originais[:10]
 
-    # Gera URLs de crop via endpoint /foto
+    # Encode URL original em base64 para usar como path param limpo
     base_url = "https://anage-imovel-api.onrender.com"
-    fotos = [f"{base_url}/foto?url={f}" for f in fotos_originais]
+    fotos = []
+    for f in fotos_originais:
+        encoded = base64.urlsafe_b64encode(f.encode()).decode().rstrip("=")
+        fotos.append(f"{base_url}/img/{encoded}.jpg")
     foto_principal = fotos[0] if fotos else ""
 
     preco_node = details.find("vr:ListPrice", NS)
@@ -107,11 +112,20 @@ async def get_imovel(codigo: str):
     return result
 
 
-@app.get("/foto")
-async def get_foto(url: str):
+@app.get("/img/{encoded}.jpg")
+async def get_img(encoded: str):
+    # Decodifica base64 para obter URL original
+    padding = 4 - len(encoded) % 4
+    if padding != 4:
+        encoded += "=" * padding
+    try:
+        original_url = base64.urlsafe_b64decode(encoded).decode()
+    except Exception:
+        raise HTTPException(status_code=400, detail="URL invalida")
+
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(url)
+            resp = await client.get(original_url)
             resp.raise_for_status()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Erro ao buscar imagem: {str(e)}")
@@ -123,7 +137,8 @@ async def get_foto(url: str):
         output = BytesIO()
         img.save(output, format="JPEG", quality=90)
         output.seek(0)
-        return StreamingResponse(output, media_type="image/jpeg")
+        return StreamingResponse(output, media_type="image/jpeg",
+                                 headers={"Content-Disposition": "inline"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar imagem: {str(e)}")
 
